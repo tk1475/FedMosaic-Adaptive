@@ -1,67 +1,41 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 class PQLoRALayer(nn.Module):
-    def __init__(self, in_dim, out_dim, r=16, alpha=16):
+    def __init__(self, in_features, out_features, r=16, alpha=16, dropout=0.1):
         super().__init__()
         self.r = r
+        self.alpha = alpha
         self.scaling = alpha / r
-
-        # --- 1. Frozen Projection Matrices (A & B) ---
-        # "Initialized with orthogonal sets" (Sec 4.2.2)
-        self.A = nn.Linear(in_dim, r, bias=False)
-        self.B = nn.Linear(r, out_dim, bias=False)
         
-        # Orthogonal Initialization
-        nn.init.orthogonal_(self.A.weight)
-        nn.init.orthogonal_(self.B.weight)
+        # Low-Rank Matrices
+        self.P_local = nn.Parameter(torch.eye(r, in_features)) # Identity init
+        self.Q_local = nn.Parameter(torch.zeros(out_features, r)) # Zero init
         
-        # Freeze A and B immediately (Theorem 2)
-        self.A.weight.requires_grad = False
-        self.B.weight.requires_grad = False
-
-        # --- 2. Local Adapter (Trainable) ---
-        # L_i in the paper
-        self.P_local = nn.Parameter(torch.eye(r), requires_grad=True)
-        self.Q_local = nn.Parameter(torch.zeros(r), requires_grad=True)
-
-        # --- 3. Global Adapter (Frozen) ---
-        # G_i in the paper (Personalized Global Model)
-        # We start with identity/zeros until first aggregation
-        self.P_global = nn.Parameter(torch.eye(r), requires_grad=False)
-        self.Q_global = nn.Parameter(torch.zeros(r), requires_grad=False)
-
-        # --- 4. Gating Parameter (beta) ---
-        # Eq 7: Balances Local vs Global knowledge
-        self.beta = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-
+        # Gating parameter (controls Local vs Global mix)
+        self.beta = nn.Parameter(torch.tensor(0.5)) 
+        
+        # Global Buffers (Frozen, updated by Server)
+        self.register_buffer("P_global", torch.zeros(r, in_features))
+        self.register_buffer("Q_global", torch.zeros(out_features, r))
+        
+        self.dropout = nn.Dropout(p=dropout)
+        
+    def update_global_weights(self, P, Q):
+        with torch.no_grad():
+            self.P_global.copy_(P)
+            self.Q_global.copy_(Q)
+            
     def forward(self, x):
-        # x shape: (batch, seq, in_dim)
+        # Local Path
+        local_out = (x @ self.P_local.T) @ self.Q_local.T
         
-        # 1. Down Projection (Shared A)
-        x_down = self.A(x) # (batch, seq, r)
-
-        # 2. Local Pathway (L_i)
-        # x_L = x_down @ P_local + Q_local
-        x_L = torch.matmul(x_down, self.P_local) + self.Q_local
+        # Global Path
+        global_out = (x @ self.P_global.T) @ self.Q_global.T
         
-        # 3. Global Pathway (G_i) - Frozen
-        with torch.no_grad():
-            x_G = torch.matmul(x_down, self.P_global) + self.Q_global
-
-        # 4. Gating (Eq 7)
-        # h_out = (1 - sigmoid(beta)) * h_L + sigmoid(beta) * h_G
-        gate = torch.sigmoid(self.beta)
-        x_combined = (1 - gate) * x_L + gate * x_G
-
-        # 5. Up Projection (Shared B)
-        x_up = self.B(x_combined) # (batch, seq, out_dim)
-
-        return x_up * self.scaling
+        # RELA Equation: Mix based on Beta
+        combined = (1 - self.beta) * local_out + self.beta * global_out
         
-    def update_global_weights(self, new_P, new_Q):
-        """Updates the frozen global component after aggregation."""
-        with torch.no_grad():
-            self.P_global.copy_(new_P)
-            self.Q_global.copy_(new_Q)
+        return self.dropout(combined) * self.scaling
