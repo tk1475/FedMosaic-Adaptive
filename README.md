@@ -1,8 +1,7 @@
-# CS6304/EE5102 Advanced Topics in Machine Learning (Dr. Muhammad Tahir, LUMS)
-
 # FedMosaic-Adaptive 
+## CS6304/EE5102 Advanced Topics in Machine Learning (Dr. Muhammad Tahir, LUMS)
 
-This repository accompanies the ATML project report and currently implements the Layerwise Routing and Data-Free Geometric Alignment components for federated alignment of heterogeneous LLM adapters. RepSim remains future work; existing experiments revolve around routing controllers on top of block-wise PQ-LoRA adapters plus geometry-aware alignment.
+This repository accompanies the final project report for the course CS6304/EE5102 Advanced Topics in Machine Learning and currently implements the Layerwise Routing and Data-Free Geometric Alignment components for federated alignment of heterogeneous LLM adapters. RepSim remains future work; existing experiments revolve around routing controllers on top of block-wise PQ-LoRA adapters plus geometry-aware alignment.
 
 ---
 
